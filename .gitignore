@@ -1,0 +1,44 @@
+# Dependências
+node_modules/
+frontend/node_modules/
+backend/node_modules/
+
+# Builds
+frontend/dist/
+frontend/.vite/
+
+# Banco de dados (sensível)
+backend/database/*.db
+backend/database/*.db-shm
+backend/database/*.db-wal
+
+# Logs
+backend/logs/
+*.log
+
+# Uploads
+backend/uploads/
+
+# Variáveis de ambiente (NÃO commitar)
+backend/.env
+frontend/.env
+frontend/.env.local
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# PWA (gerado no build)
+frontend/dist/sw.js
+frontend/dist/workbox-*.js
+
+# Temporários
+*.tmp
+*.bak

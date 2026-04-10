@@ -1,0 +1,177 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ========================================
+   VARIÁVEIS GLOBAIS
+======================================== */
+:root {
+  --color-bg-primary: #0f0f2e;
+  --color-bg-secondary: #1a1a4e;
+  --color-accent: #4f46e5;
+  --color-success: #22c55e;
+  --color-warning: #f97316;
+  --color-danger: #ef4444;
+  --radius: 16px;
+}
+
+/* ========================================
+   RESET E BASE
+======================================== */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  background: var(--color-bg-primary);
+}
+
+body {
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: #ffffff;
+  touch-action: manipulation;
+}
+
+/* Previne pull-to-refresh no Android */
+body {
+  overscroll-behavior: none;
+}
+
+/* ========================================
+   COMPONENTES CUSTOMIZADOS
+======================================== */
+@layer components {
+  /* Botão principal do terminal (grande, touch-friendly) */
+  .btn-terminal {
+    @apply flex items-center justify-center gap-3 w-full py-5 px-8
+           text-xl font-bold rounded-2xl transition-all duration-200
+           active:scale-95 select-none cursor-pointer;
+  }
+
+  .btn-primary {
+    @apply bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-900/50;
+  }
+
+  .btn-success {
+    @apply bg-green-600 hover:bg-green-500 text-white shadow-lg shadow-green-900/50;
+  }
+
+  .btn-danger {
+    @apply bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-900/50;
+  }
+
+  .btn-outline {
+    @apply border-2 border-white/20 hover:border-white/40 text-white bg-white/5 hover:bg-white/10;
+  }
+
+  /* Card painel */
+  .card {
+    @apply bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl p-5;
+  }
+
+  /* Indicador de status */
+  .status-dot {
+    @apply w-3 h-3 rounded-full inline-block;
+  }
+
+  /* Input PIN */
+  .pin-digit {
+    @apply w-16 h-20 text-4xl font-mono text-center text-white
+           bg-white/10 border-2 border-white/20 rounded-xl
+           focus:outline-none focus:border-indigo-400 focus:bg-white/20
+           transition-all duration-200;
+  }
+
+  /* Overlay do scanner facial */
+  .face-overlay {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 260px;
+    height: 320px;
+    border-radius: 50% 50% 50% 50% / 60% 60% 40% 40%;
+  }
+}
+
+/* ========================================
+   ANIMAÇÕES
+======================================== */
+@keyframes scanLine {
+  0%   { top: 10%; opacity: 1; }
+  90%  { top: 90%; opacity: 1; }
+  100% { top: 90%; opacity: 0; }
+}
+
+@keyframes pulse-ring {
+  0%   { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(79, 70, 229, 0.6); }
+  70%  { transform: scale(1);    box-shadow: 0 0 0 20px rgba(79, 70, 229, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(79, 70, 229, 0); }
+}
+
+@keyframes successPulse {
+  0%   { transform: scale(0.5); opacity: 0; }
+  60%  { transform: scale(1.1); opacity: 1; }
+  100% { transform: scale(1); }
+}
+
+.scan-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #4ade80, transparent);
+  animation: scanLine 2s ease-in-out infinite;
+}
+
+.pulse-ring {
+  animation: pulse-ring 2s cubic-bezier(0.455, 0.03, 0.515, 0.955) infinite;
+}
+
+.success-icon {
+  animation: successPulse 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+}
+
+/* ========================================
+   SCROLLBAR customizada (painel admin)
+======================================== */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(255,255,255,0.05);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.2);
+  border-radius: 3px;
+}
+
+/* ========================================
+   UTILIDADES
+======================================== */
+.glass {
+  background: rgba(255,255,255,0.05);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255,255,255,0.1);
+}
+
+.text-gradient {
+  background: linear-gradient(135deg, #818cf8, #c084fc);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Cursor none para tablet kiosk */
+.kiosk-mode * {
+  cursor: none !important;
+}
