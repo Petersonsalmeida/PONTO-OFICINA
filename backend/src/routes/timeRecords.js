@@ -1,6 +1,6 @@
 const express = require('express');
 const { getDb } = require('../config/database');
-const { requireAuth, terminalAuth } = require('../middleware/auth');
+const { requireAuth, requireProfile, terminalAuth } = require('../middleware/auth');
 const { audit } = require('../utils/auditLog');
 const { detectPunchType, calcDayTotals } = require('../utils/worktime');
 const syncService = require('../services/syncService');
