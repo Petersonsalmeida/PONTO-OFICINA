@@ -13,9 +13,12 @@ function getSupabase() {
     return null;
   }
 
+  // Usa schema isolado para não conflitar com outros sistemas (ex: controle de estoque)
+  const schema = process.env.SUPABASE_SCHEMA || 'ponto';
+
   _supabase = createClient(url, key, {
     auth: { persistSession: false },
-    db: { schema: 'public' },
+    db: { schema },
   });
 
   return _supabase;
