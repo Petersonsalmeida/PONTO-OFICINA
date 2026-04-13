@@ -1,0 +1,5 @@
+<svg xmlns='http://www.w3.org/2000/svg' width='512' height='512' viewBox='0 0 512 512'>
+  <rect width='512' height='512' rx='92' fill='#111827'/>
+  <rect x='40.96' y='40.96' width='430.08' height='430.08' rx='66' fill='none' stroke='#3b82f6' stroke-width='20.48'/>
+  <text x='50%' y='54%' font-family='Arial,sans-serif' font-weight='bold' font-size='179' fill='#3b82f6' text-anchor='middle' dominant-baseline='middle'>CAA</text>
+</svg>
