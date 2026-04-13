@@ -29,4 +29,4 @@ cd "$APP_DIR/frontend" && npm run build
 pm2 reload ponto-backend --update-env
 
 echo "✅ Sistema atualizado com sucesso!"
-echo "   https://ponto.centroautomotivoalianca.com.br"
+echo "   https://ponto.centroautoalianca.com.br"

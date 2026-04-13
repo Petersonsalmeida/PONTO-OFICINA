@@ -10,9 +10,9 @@
 
 set -e
 
-DOMAIN="ponto.centroautomotivoalianca.com.br"
+DOMAIN="ponto.centroautoalianca.com.br"
 APP_DIR="/var/www/ponto-oficina"
-EMAIL="ti@centroautomotivoalianca.com.br"  # usado pelo Certbot para alertas SSL
+EMAIL="ti@centroautoalianca.com.br"  # usado pelo Certbot para alertas SSL
 
 echo "🚀 Iniciando deploy em $DOMAIN ..."
 
@@ -194,9 +194,9 @@ echo "╔═══════════════════════�
 echo "║   ✅  SISTEMA IMPLANTADO COM SUCESSO!                    ║"
 echo "╠══════════════════════════════════════════════════════════╣"
 echo "║                                                          ║"
-echo "║  Terminal de ponto:  https://$DOMAIN/        ║"
-echo "║  Painel admin:       https://$DOMAIN/admin   ║"
-echo "║  API:                https://$DOMAIN/api/    ║"
+echo "║  Terminal de ponto:  https://ponto.centroautoalianca.com.br/       ║"
+echo "║  Painel admin:       https://ponto.centroautoalianca.com.br/admin ║"
+echo "║  API:                https://ponto.centroautoalianca.com.br/api/  ║"
 echo "║                                                          ║"
 echo "╠══════════════════════════════════════════════════════════╣"
 echo "║  PRIMEIRO ACESSO:                                        ║"
