@@ -255,10 +255,10 @@ async function generatePDF(employeeId, dataInicio, dataFim) {
   doc.text(emp.cargo || 'Funcionário', L1_CX, SIG_LINE_Y + 12.5, { align: 'center' });
   doc.text('Empregador', L2_CX, SIG_LINE_Y + 12.5, { align: 'center' });
 
-  // QR Code — centro, entre os dois blocos de assinatura
+  // QR Code — centro, alinhado com a linha de assinatura (abaixo do texto local/data)
   const QR_SIZE = 18;
   const QR_X = pageW / 2 - QR_SIZE / 2;
-  const QR_Y = SIG_Y + 1;
+  const QR_Y = SIG_LINE_Y - QR_SIZE / 2; // centralizado na linha de assinatura
   const qrData = `PONTO|${emp.cpf}|${dataInicio}|${dataFim}|${Date.now()}`;
   try {
     const qrDataUrl = await QRCode.toDataURL(qrData, { width: 80, margin: 0 });
