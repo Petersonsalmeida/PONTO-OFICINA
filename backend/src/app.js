@@ -22,6 +22,9 @@ const scheduleRoutes = require('./routes/schedules');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Necessário quando rodando atrás de proxy reverso (Traefik, Nginx, etc.)
+app.set('trust proxy', 1);
+
 // ==========================================
 // MIDDLEWARES GLOBAIS
 // ==========================================
