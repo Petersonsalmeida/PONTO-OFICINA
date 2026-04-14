@@ -11,7 +11,7 @@ const { getDb } = require('../config/database');
 const { calcDayTotals, minutesToTime } = require('../utils/worktime');
 
 // ==========================================
-// GERAÇÃO DE PDF — Espelho de Ponto
+// GERAÇÃO DE PDF — Espelho de Ponto (Paisagem A4, 1 página)
 // ==========================================
 async function generatePDF(employeeId, dataInicio, dataFim) {
   const db = getDb();
@@ -33,46 +33,80 @@ async function generatePDF(employeeId, dataInicio, dataFim) {
     ORDER BY data ASC, hora ASC
   `).all(employeeId, dataInicio, dataFim);
 
-  // Agrupar por dia
   const byDay = {};
   for (const r of records) {
     if (!byDay[r.data]) byDay[r.data] = [];
     byDay[r.data].push(r);
   }
 
-  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-  const pageW = doc.internal.pageSize.getWidth();
+  // Paisagem A4: 297 × 210 mm
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const pageW = doc.internal.pageSize.getWidth();   // 297 mm
+  const pageH = doc.internal.pageSize.getHeight();  // 210 mm
+  const mX = 12;
+  const usableW = pageW - mX * 2;                  // 273 mm
 
-  // ---- Cabeçalho ----
-  doc.setFontSize(14);
+  // ── FAIXA DE CABEÇALHO ─────────────────────────────────────
+  const HH = 23;
+  doc.setFillColor(22, 36, 71);
+  doc.rect(0, 0, pageW, HH, 'F');
+
+  // Linha dourada
+  doc.setDrawColor(201, 162, 83);
+  doc.setLineWidth(0.6);
+  doc.line(0, HH, pageW, HH);
+  doc.setLineWidth(0.2);
+
+  // Empresa — esquerda
+  doc.setTextColor(255, 255, 255);
   doc.setFont('helvetica', 'bold');
-  doc.text('ESPELHO DE PONTO ELETRÔNICO', pageW / 2, 18, { align: 'center' });
-
-  doc.setFontSize(10);
+  doc.setFontSize(9.5);
+  doc.text((config.empresa_nome || 'Centro Automotivo Aliança').toUpperCase(), mX, 9);
   doc.setFont('helvetica', 'normal');
-  doc.text(`Empresa: ${config.empresa_nome || 'Centro Automotivo Aliança'}`, 14, 28);
-  doc.text(`CNPJ: ${config.empresa_cnpj || '--'}`, 14, 34);
-  doc.text(`Endereço: ${config.empresa_endereco || 'Porto Alegre, RS'}`, 14, 40);
+  doc.setFontSize(6.5);
+  doc.text(`CNPJ: ${config.empresa_cnpj || '--'}`, mX, 14);
+  doc.text(config.empresa_endereco || 'Porto Alegre, RS', mX, 18.5);
 
-  doc.line(14, 44, pageW - 14, 44);
+  // Título — centro
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13);
+  doc.text('ESPELHO DE PONTO ELETRÔNICO', pageW / 2, 10, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.text('Portaria MTE nº 671/2021', pageW / 2, 16, { align: 'center' });
 
-  doc.text(`Funcionário: ${emp.nome}`, 14, 50);
-  doc.text(`CPF: ${emp.cpf}`, 14, 56);
-  doc.text(`Cargo: ${emp.cargo}`, 14, 62);
-  doc.text(`Período: ${formatDateBR(dataInicio)} a ${formatDateBR(dataFim)}`, 14, 68);
-  doc.text(`Data de admissão: ${emp.data_admissao ? formatDateBR(emp.data_admissao) : '--'}`, 120, 50);
-  doc.text(`Gerado em: ${new Date().toLocaleString('pt-BR')}`, 120, 56);
+  // Data de geração — direita
+  doc.setFontSize(6.5);
+  doc.text(`Gerado em: ${new Date().toLocaleString('pt-BR')}`, pageW - mX, 14, { align: 'right' });
 
-  doc.line(14, 72, pageW - 14, 72);
+  // ── FAIXA DO FUNCIONÁRIO ───────────────────────────────────
+  const EB_Y = HH + 0.8;
+  const EB_H = 11;
+  doc.setFillColor(234, 238, 247);
+  doc.rect(0, EB_Y, pageW, EB_H, 'F');
+  doc.setDrawColor(180, 195, 220);
+  doc.setLineWidth(0.3);
+  doc.line(0, EB_Y + EB_H, pageW, EB_Y + EB_H);
 
-  // ---- Tabela de registros ----
+  doc.setTextColor(22, 36, 71);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text(emp.nome.toUpperCase(), mX, EB_Y + 5.5);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.5);
+  doc.text(`CPF: ${emp.cpf}`, mX, EB_Y + 9.5);
+  doc.text(`Cargo: ${emp.cargo || '--'}`, mX + 92, EB_Y + 5.5);
+  doc.text(`Admissão: ${emp.data_admissao ? formatDateBR(emp.data_admissao) : '--'}`, mX + 92, EB_Y + 9.5);
+  doc.text(`Período: ${formatDateBR(dataInicio)} a ${formatDateBR(dataFim)}`, mX + 168, EB_Y + 5.5);
+
+  // ── TABELA DE REGISTROS ────────────────────────────────────
   const tableRows = [];
   let totalTrabalhado = 0;
   let totalExtras = 0;
   let totalNoturnas = 0;
   let diasFalta = 0;
 
-  // Iterar por todos os dias do período
   const start = new Date(dataInicio + 'T00:00:00');
   const end = new Date(dataFim + 'T00:00:00');
 
@@ -83,16 +117,17 @@ async function generatePDF(employeeId, dataInicio, dataFim) {
     const holiday = db.prepare('SELECT nome FROM holidays WHERE data = ?').get(dateStr);
     const schedule = db.prepare('SELECT * FROM work_schedules WHERE employee_id = ? AND data = ?').get(employeeId, dateStr);
 
-    const dow = d.getDay(); // 0=Dom, 6=Sab
+    const dow = d.getDay();
     const isDayOff = dow === 0 || (schedule && schedule.tipo_dia === 'folga');
     const isFeriado = !!holiday;
 
     const byType = {};
     for (const r of dayRecords) byType[r.tipo] = r.hora;
 
-    if (dayRecords.length === 0 && !isDayOff && !isFeriado) {
-      diasFalta++;
-    }
+    let obs = '';
+    if (isFeriado) obs = holiday.nome;
+    else if (isDayOff) obs = 'Folga';
+    else if (dayRecords.length === 0) { obs = 'FALTA'; diasFalta++; }
 
     const totals = dayRecords.length > 0 ? calcDayTotals(dayRecords, schedule) : null;
     if (totals) {
@@ -104,117 +139,142 @@ async function generatePDF(employeeId, dataInicio, dataFim) {
     tableRows.push([
       formatDateBRShort(dateStr),
       getDiaSemana(dow),
-      byType['entrada'] || (isFeriado ? `Feriado: ${holiday.nome}` : isDayOff ? 'Folga' : dayRecords.length === 0 ? 'FALTA' : '--'),
+      byType['entrada'] || '--',
       byType['saida_almoco'] || '--',
       byType['retorno_almoco'] || '--',
       byType['saida'] || '--',
       totals ? minutesToTime(totals.trabalhado) : '--',
       totals ? minutesToTime(totals.horas_extras) : '--',
+      obs,
     ]);
   }
 
+  const TABLE_Y = EB_Y + EB_H + 1.5;
+
   doc.autoTable({
-    startY: 76,
-    head: [['Data', 'Dia', 'Entrada', 'Saída Alm.', 'Retorno Alm.', 'Saída', 'Total', 'H.Extra']],
+    startY: TABLE_Y,
+    head: [['Data', 'Dia', 'Entrada', 'Saída Alm.', 'Retorno Alm.', 'Saída', 'Trabalhado', 'H. Extra', 'Observação']],
     body: tableRows,
-    styles: { fontSize: 8, cellPadding: 1.5 },
-    headStyles: { fillColor: [30, 30, 80], textColor: 255, fontStyle: 'bold' },
-    alternateRowStyles: { fillColor: [245, 245, 255] },
-    columnStyles: {
-      0: { cellWidth: 20 }, 1: { cellWidth: 18 }, 6: { cellWidth: 18 }, 7: { cellWidth: 18 },
+    styles: {
+      fontSize: 6,
+      cellPadding: { top: 0.8, bottom: 0.8, left: 1.5, right: 1.5 },
+      lineColor: [205, 213, 230],
+      lineWidth: 0.15,
+      textColor: [30, 30, 30],
+      valign: 'middle',
     },
-    margin: { left: 14, right: 14 },
+    headStyles: {
+      fillColor: [22, 36, 71],
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+      fontSize: 6.5,
+      halign: 'center',
+      cellPadding: { top: 1.2, bottom: 1.2, left: 1.5, right: 1.5 },
+    },
+    alternateRowStyles: { fillColor: [248, 250, 255] },
+    columnStyles: {
+      0: { cellWidth: 16, halign: 'center' },
+      1: { cellWidth: 13, halign: 'center' },
+      2: { cellWidth: 30, halign: 'center' },
+      3: { cellWidth: 28, halign: 'center' },
+      4: { cellWidth: 32, halign: 'center' },
+      5: { cellWidth: 28, halign: 'center' },
+      6: { cellWidth: 26, halign: 'center', fontStyle: 'bold' },
+      7: { cellWidth: 24, halign: 'center' },
+      8: { cellWidth: 'auto' },
+    },
+    margin: { left: mX, right: mX },
+    tableWidth: usableW,
+    didParseCell: (data) => {
+      if (data.section !== 'body') return;
+      const val = String(data.cell.raw || '');
+      if (val === 'FALTA') {
+        data.cell.styles.textColor = [190, 30, 30];
+        data.cell.styles.fontStyle = 'bold';
+      }
+    },
   });
 
-  const finalY = doc.lastAutoTable.finalY + 8;
+  const afterTableY = doc.lastAutoTable.finalY;
 
-  // ---- Totais ----
+  // ── TOTAIS ────────────────────────────────────────────────
+  const TOT_Y = afterTableY + 1.5;
+  doc.setFillColor(22, 36, 71);
+  doc.rect(mX, TOT_Y, usableW, 7, 'F');
+  doc.setTextColor(255, 255, 255);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9);
-  doc.text('TOTAIS DO PERÍODO', 14, finalY);
-  doc.setFont('helvetica', 'normal');
-  doc.text(`Total trabalhado: ${minutesToTime(totalTrabalhado)}`, 14, finalY + 6);
-  doc.text(`Horas extras: ${minutesToTime(totalExtras)}`, 60, finalY + 6);
-  doc.text(`Horas noturnas: ${minutesToTime(totalNoturnas)}`, 110, finalY + 6);
-  doc.text(`Dias de falta: ${diasFalta}`, 160, finalY + 6);
+  doc.setFontSize(7);
+  doc.text(
+    `Total Trabalhado: ${minutesToTime(totalTrabalhado)}   |   Horas Extras: ${minutesToTime(totalExtras)}   |   Horas Noturnas: ${minutesToTime(totalNoturnas)}   |   Dias de Falta: ${diasFalta}`,
+    pageW / 2, TOT_Y + 4.5, { align: 'center' }
+  );
 
-  // ---- Assinaturas ----
-  // Verificar se há espaço suficiente na página; se não, adicionar nova página
-  const pageH = doc.internal.pageSize.getHeight();
-  const neededSpace = 60;
-  let sigStartY = finalY + 14;
-  if (sigStartY + neededSpace > pageH - 15) {
-    doc.addPage();
-    sigStartY = 20;
-  }
+  // ── ASSINATURAS ───────────────────────────────────────────
+  const SIG_Y = TOT_Y + 10;
 
   // Declaração
-  doc.setFontSize(8);
+  doc.setFontSize(6.5);
   doc.setFont('helvetica', 'italic');
+  doc.setTextColor(90, 90, 90);
   doc.text(
     'Declaro que os registros acima refletem fielmente minha jornada de trabalho no período indicado.',
-    pageW / 2, sigStartY, { align: 'center' }
+    pageW / 2, SIG_Y, { align: 'center' }
   );
 
   // Local e data
   doc.setFont('helvetica', 'normal');
+  doc.setTextColor(50, 50, 50);
   const dataHoje = new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' });
-  doc.text(
-    `${config.empresa_endereco || 'Porto Alegre, RS'}, ${dataHoje}`,
-    pageW / 2, sigStartY + 7, { align: 'center' }
-  );
+  const cidade = config.empresa_cidade || config.empresa_endereco || 'Porto Alegre, RS';
+  doc.text(`${cidade}, ${dataHoje}`, pageW / 2, SIG_Y + 5, { align: 'center' });
 
-  // Blocos de assinatura
-  const sigLineY = sigStartY + 28;
-  const col1Center = 52;
-  const col2Center = pageW - 52;
+  // Linhas de assinatura
+  const SIG_LINE_Y = SIG_Y + 16;
+  const SIG_W = 88;
+  const L1_X = mX;
+  const L2_X = pageW - mX - SIG_W;
+  const L1_CX = L1_X + SIG_W / 2;
+  const L2_CX = L2_X + SIG_W / 2;
 
-  // Linhas de assinatura (com espaço acima para a assinatura manuscrita)
-  doc.line(14, sigLineY, col1Center + 38, sigLineY);
-  doc.line(col2Center - 38, sigLineY, pageW - 14, sigLineY);
+  doc.setDrawColor(22, 36, 71);
+  doc.setLineWidth(0.5);
+  doc.line(L1_X, SIG_LINE_Y, L1_X + SIG_W, SIG_LINE_Y);
+  doc.line(L2_X, SIG_LINE_Y, L2_X + SIG_W, SIG_LINE_Y);
 
-  doc.setFontSize(8);
+  doc.setTextColor(22, 36, 71);
   doc.setFont('helvetica', 'bold');
-  doc.text(emp.nome, col1Center, sigLineY + 5, { align: 'center' });
-  doc.text(config.empresa_nome || 'Centro Automotivo Aliança', col2Center, sigLineY + 5, { align: 'center' });
+  doc.setFontSize(7);
+  doc.text(emp.nome, L1_CX, SIG_LINE_Y + 4.5, { align: 'center' });
+  doc.text(config.empresa_nome || 'Centro Automotivo Aliança', L2_CX, SIG_LINE_Y + 4.5, { align: 'center' });
 
   doc.setFont('helvetica', 'normal');
-  doc.text(`CPF: ${emp.cpf}`, col1Center, sigLineY + 10, { align: 'center' });
-  doc.text(`CNPJ: ${config.empresa_cnpj || '--'}`, col2Center, sigLineY + 10, { align: 'center' });
+  doc.setFontSize(6.5);
+  doc.setTextColor(60, 60, 60);
+  doc.text(`CPF: ${emp.cpf}`, L1_CX, SIG_LINE_Y + 8.5, { align: 'center' });
+  doc.text(`CNPJ: ${config.empresa_cnpj || '--'}`, L2_CX, SIG_LINE_Y + 8.5, { align: 'center' });
+  doc.text(emp.cargo || 'Funcionário', L1_CX, SIG_LINE_Y + 12.5, { align: 'center' });
+  doc.text('Empregador', L2_CX, SIG_LINE_Y + 12.5, { align: 'center' });
 
-  doc.text(emp.cargo || 'Funcionário', col1Center, sigLineY + 15, { align: 'center' });
-  doc.text('Responsável / Empregador', col2Center, sigLineY + 15, { align: 'center' });
-
-  // Caixas de data abaixo de cada assinatura
-  const dateBoxY = sigLineY + 22;
-  doc.setDrawColor(150);
-  doc.roundedRect(14, dateBoxY, 76, 8, 1, 1);
-  doc.roundedRect(col2Center - 38, dateBoxY, 76, 8, 1, 1);
-  doc.setFontSize(7);
-  doc.setTextColor(120);
-  doc.text('Data: ____/____/________', col1Center, dateBoxY + 5.5, { align: 'center' });
-  doc.text('Data: ____/____/________', col2Center, dateBoxY + 5.5, { align: 'center' });
-  doc.setTextColor(0);
-  doc.setDrawColor(0);
-
-  // ---- QR Code de autenticidade (canto superior direito da área de assinatura) ----
+  // QR Code — centro, entre os dois blocos de assinatura
+  const QR_SIZE = 18;
+  const QR_X = pageW / 2 - QR_SIZE / 2;
+  const QR_Y = SIG_Y + 1;
   const qrData = `PONTO|${emp.cpf}|${dataInicio}|${dataFim}|${Date.now()}`;
   try {
     const qrDataUrl = await QRCode.toDataURL(qrData, { width: 80, margin: 0 });
-    const qrX = pageW / 2 - 10;
-    doc.addImage(qrDataUrl, 'PNG', qrX, sigStartY - 2, 20, 20);
-    doc.setFontSize(6);
-    doc.setTextColor(100);
-    doc.text('Autenticidade', qrX + 10, sigStartY + 20, { align: 'center' });
-    doc.setTextColor(0);
+    doc.addImage(qrDataUrl, 'PNG', QR_X, QR_Y, QR_SIZE, QR_SIZE);
+    doc.setFontSize(5.5);
+    doc.setTextColor(120, 120, 120);
+    doc.text('Autenticidade', pageW / 2, QR_Y + QR_SIZE + 2, { align: 'center' });
   } catch { /* QR opcional */ }
 
-  // ---- Rodapé ----
-  doc.setFontSize(7);
+  // ── RODAPÉ ────────────────────────────────────────────────
+  doc.setFontSize(5.5);
   doc.setFont('helvetica', 'italic');
+  doc.setTextColor(160, 160, 160);
   doc.text(
-    'Documento gerado conforme Portaria MTE 671/2021 — Sistema de Ponto Eletrônico Centro Automotivo Aliança',
-    pageW / 2, doc.internal.pageSize.getHeight() - 8, { align: 'center' }
+    'Documento gerado conforme Portaria MTE nº 671/2021 — Sistema de Ponto Eletrônico — Centro Automotivo Aliança',
+    pageW / 2, pageH - 4, { align: 'center' }
   );
 
   return Buffer.from(doc.output('arraybuffer'));
