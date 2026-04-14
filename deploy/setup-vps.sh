@@ -40,7 +40,10 @@ sudo chown -R "$USER":"$USER" "$APP_DIR"
 # ---- Clonar / atualizar repositório ----
 if [ -d "$APP_DIR/.git" ]; then
   echo "🔄 Atualizando repositório..."
-  cd "$APP_DIR" && git pull origin main
+  cd "$APP_DIR"
+  # Detecta a branch padrão automaticamente
+  DEFAULT_BRANCH=$(git remote show origin | grep 'HEAD branch' | awk '{print $NF}')
+  git pull origin "$DEFAULT_BRANCH"
 else
   echo "📦 Clonando repositório..."
   git clone https://github.com/petersonsalmeida/ponto-oficina.git "$APP_DIR"
