@@ -139,22 +139,74 @@ async function generatePDF(employeeId, dataInicio, dataFim) {
   doc.text(`Dias de falta: ${diasFalta}`, 160, finalY + 6);
 
   // ---- Assinaturas ----
-  const sigY = finalY + 20;
-  doc.line(14, sigY, 85, sigY);
-  doc.line(110, sigY, pageW - 14, sigY);
-  doc.setFontSize(8);
-  doc.text(`${emp.nome}`, 49, sigY + 4, { align: 'center' });
-  doc.text('Funcionário', 49, sigY + 8, { align: 'center' });
-  doc.text('Responsável pela empresa', (110 + pageW - 14) / 2, sigY + 4, { align: 'center' });
-  doc.text('Cargo', (110 + pageW - 14) / 2, sigY + 8, { align: 'center' });
+  // Verificar se há espaço suficiente na página; se não, adicionar nova página
+  const pageH = doc.internal.pageSize.getHeight();
+  const neededSpace = 60;
+  let sigStartY = finalY + 14;
+  if (sigStartY + neededSpace > pageH - 15) {
+    doc.addPage();
+    sigStartY = 20;
+  }
 
-  // ---- QR Code de autenticidade ----
+  // Declaração
+  doc.setFontSize(8);
+  doc.setFont('helvetica', 'italic');
+  doc.text(
+    'Declaro que os registros acima refletem fielmente minha jornada de trabalho no período indicado.',
+    pageW / 2, sigStartY, { align: 'center' }
+  );
+
+  // Local e data
+  doc.setFont('helvetica', 'normal');
+  const dataHoje = new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' });
+  doc.text(
+    `${config.empresa_endereco || 'Porto Alegre, RS'}, ${dataHoje}`,
+    pageW / 2, sigStartY + 7, { align: 'center' }
+  );
+
+  // Blocos de assinatura
+  const sigLineY = sigStartY + 28;
+  const col1Center = 52;
+  const col2Center = pageW - 52;
+
+  // Linhas de assinatura (com espaço acima para a assinatura manuscrita)
+  doc.line(14, sigLineY, col1Center + 38, sigLineY);
+  doc.line(col2Center - 38, sigLineY, pageW - 14, sigLineY);
+
+  doc.setFontSize(8);
+  doc.setFont('helvetica', 'bold');
+  doc.text(emp.nome, col1Center, sigLineY + 5, { align: 'center' });
+  doc.text(config.empresa_nome || 'Centro Automotivo Aliança', col2Center, sigLineY + 5, { align: 'center' });
+
+  doc.setFont('helvetica', 'normal');
+  doc.text(`CPF: ${emp.cpf}`, col1Center, sigLineY + 10, { align: 'center' });
+  doc.text(`CNPJ: ${config.empresa_cnpj || '--'}`, col2Center, sigLineY + 10, { align: 'center' });
+
+  doc.text(emp.cargo || 'Funcionário', col1Center, sigLineY + 15, { align: 'center' });
+  doc.text('Responsável / Empregador', col2Center, sigLineY + 15, { align: 'center' });
+
+  // Caixas de data abaixo de cada assinatura
+  const dateBoxY = sigLineY + 22;
+  doc.setDrawColor(150);
+  doc.roundedRect(14, dateBoxY, 76, 8, 1, 1);
+  doc.roundedRect(col2Center - 38, dateBoxY, 76, 8, 1, 1);
+  doc.setFontSize(7);
+  doc.setTextColor(120);
+  doc.text('Data: ____/____/________', col1Center, dateBoxY + 5.5, { align: 'center' });
+  doc.text('Data: ____/____/________', col2Center, dateBoxY + 5.5, { align: 'center' });
+  doc.setTextColor(0);
+  doc.setDrawColor(0);
+
+  // ---- QR Code de autenticidade (canto superior direito da área de assinatura) ----
   const qrData = `PONTO|${emp.cpf}|${dataInicio}|${dataFim}|${Date.now()}`;
   try {
-    const qrDataUrl = await QRCode.toDataURL(qrData, { width: 60, margin: 0 });
-    doc.addImage(qrDataUrl, 'PNG', pageW - 30, sigY - 15, 20, 20);
+    const qrDataUrl = await QRCode.toDataURL(qrData, { width: 80, margin: 0 });
+    const qrX = pageW / 2 - 10;
+    doc.addImage(qrDataUrl, 'PNG', qrX, sigStartY - 2, 20, 20);
     doc.setFontSize(6);
-    doc.text('Autenticidade', pageW - 20, sigY + 7, { align: 'center' });
+    doc.setTextColor(100);
+    doc.text('Autenticidade', qrX + 10, sigStartY + 20, { align: 'center' });
+    doc.setTextColor(0);
   } catch { /* QR opcional */ }
 
   // ---- Rodapé ----
