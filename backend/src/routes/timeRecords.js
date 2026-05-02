@@ -3,6 +3,7 @@ const { getDb } = require('../config/database');
 const { requireAuth, requireProfile, terminalAuth } = require('../middleware/auth');
 const { audit } = require('../utils/auditLog');
 const { detectPunchType, calcDayTotals } = require('../utils/worktime');
+const { decryptFacialTemplate } = require('../utils/crypto');
 const syncService = require('../services/syncService');
 
 const router = express.Router();
@@ -245,6 +246,73 @@ router.delete('/:id', requireAuth, requireProfile('super_admin', 'rh_gestor'), (
 
   audit('time_records', req.params.id, 'DELETE', record, null, req.user.id, req.ip);
   res.json({ message: 'Registro marcado como excluído' });
+});
+
+// ==========================================
+// POST /api/time-records/recognize-face
+// Reconhecimento facial server-side.
+// O browser envia apenas o descritor 128D do frame capturado.
+// O matching acontece no servidor — templates nunca saem do banco (LGPD).
+// Não usa nenhuma dependência extra: distância euclidiana pura em JS.
+// ==========================================
+router.post('/recognize-face', terminalAuth, (req, res) => {
+  const { descriptor } = req.body;
+
+  if (!descriptor || !Array.isArray(descriptor) || descriptor.length < 64) {
+    return res.status(400).json({ error: 'Descritor inválido' });
+  }
+
+  const db = getDb();
+  const employees = db.prepare(
+    'SELECT id, nome, template_facial FROM employees WHERE ativo = 1 AND template_facial IS NOT NULL'
+  ).all();
+
+  if (employees.length === 0) {
+    return res.json({ match: null, reason: 'no_templates' });
+  }
+
+  const query = new Float32Array(descriptor);
+  let bestMatch = null;
+  let bestDistance = Infinity;
+
+  for (const emp of employees) {
+    const template = decryptFacialTemplate(emp.template_facial);
+    if (!template) continue;
+
+    // Suporta formato legado (1 descritor 1D) e novo (N descritores 2D)
+    const isMulti = Array.isArray(template[0]);
+    const variants = isMulti ? template : [template];
+
+    for (const variant of variants) {
+      const d = new Float32Array(variant);
+      let sum = 0;
+      const len = Math.min(query.length, d.length);
+      for (let i = 0; i < len; i++) {
+        const diff = query[i] - d[i];
+        sum += diff * diff;
+      }
+      const distance = Math.sqrt(sum);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestMatch = { id: emp.id, nome: emp.nome };
+      }
+    }
+  }
+
+  const THRESHOLD = 0.6;
+  if (!bestMatch || bestDistance > THRESHOLD) {
+    return res.json({ match: null });
+  }
+
+  const confidence = Math.max(0, 1 - bestDistance);
+  res.json({
+    match: {
+      ...bestMatch,
+      distance: Math.round(bestDistance * 1000) / 1000,
+      confidence,
+      confidencePercent: Math.round(confidence * 100),
+    },
+  });
 });
 
 module.exports = router;

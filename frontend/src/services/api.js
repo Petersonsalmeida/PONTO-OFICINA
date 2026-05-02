@@ -63,6 +63,7 @@ export const employeeAPI = {
 export const timeRecordAPI = {
   punch: (data) => api.post('/time-records/punch', data),
   verifyPin: (pin) => api.post('/time-records/verify-pin', { pin }),
+  recognizeFace: (descriptor) => api.post('/time-records/recognize-face', { descriptor }, { timeout: 5000 }),
   list: (params) => api.get('/time-records', { params }),
   todayStatus: () => api.get('/time-records/today-status'),
   employeePeriod: (id, params) => api.get(`/time-records/employee/${id}/period`, { params }),

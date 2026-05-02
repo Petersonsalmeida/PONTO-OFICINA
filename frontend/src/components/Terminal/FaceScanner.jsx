@@ -1,257 +1,223 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { Camera, Scan, AlertCircle } from 'lucide-react';
-import {
-  loadModels, detectFace, detectFaceLite, matchFace, detectBlink,
-} from '../../services/faceRecognition';
+import { Camera, AlertCircle, CheckCircle, Scan } from 'lucide-react';
+import { loadModels, detectFace } from '../../services/faceRecognition';
+import { timeRecordAPI } from '../../services/api';
 import { useAppStore } from '../../stores/appStore';
 
 /**
- * FaceScanner — câmera ativa com reconhecimento facial em tempo real.
+ * FaceScanner — terminal de reconhecimento facial profissional.
  *
- * Estratégia de performance:
- *  - Detecção throttled em ~3 FPS (300ms entre frames). Inferência TF.js
- *    é pesada; rodar a 60 FPS trava o navegador.
- *  - Fase liveness usa detectFaceLite (sem descritor 128D) — ~3x mais rápida.
- *  - Fase scanning usa detectFace completo apenas quando precisa.
+ * Arquitetura:
+ *  - Browser: detecção do rosto + extração do descritor 128D (face-api.js)
+ *  - Servidor: matching contra templates do banco (LGPD: templates nunca saem do servidor)
  *
- * Props:
- *  onMatch(employee, confidence) — rosto reconhecido com alta confiança
- *  onLowConfidence(employee, confidence) — rosto parcialmente reconhecido
- *  onFail() — não reconheceu, redirecionar para PIN
- *  onError(msg) — erro de câmera/modelo
+ * Sem verificação de piscada — desnecessária em terminal presencial.
+ * Faz até MAX_ATTEMPTS leituras e usa o melhor resultado.
  */
+
+const MAX_ATTEMPTS = 5;     // Leituras antes de desistir
+const DETECT_INTERVAL = 350; // ms entre detecções (≈3 FPS)
+
 export default function FaceScanner({ onMatch, onLowConfidence, onFail, onError }) {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const timerRef = useRef(null);
   const streamRef = useRef(null);
-  const blinkCountRef = useRef(0);
-  const blinkingRef = useRef(false);
-  const startTimeRef = useRef(Date.now());
-  const phaseStartRef = useRef(Date.now());
   const runningRef = useRef(false);
+  const attemptsRef = useRef(0);
+  const bestMatchRef = useRef(null);
+  const apiCallRef = useRef(false); // evita chamadas simultâneas
 
-  const [status, setStatus] = useState('loading'); // loading | liveness | scanning | found | notfound
-  const [livenessMsg, setLivenessMsg] = useState('Pisque os olhos para verificar que é você');
-  const [modelsReady, setModelsReady] = useState(false);
-  const [faceBox, setFaceBox] = useState(null);
+  const [status, setStatus] = useState('loading'); // loading | scanning | found | notfound
+  const [attempt, setAttempt] = useState(0);
+  const [bestScore, setBestScore] = useState(0);
+  const [foundName, setFoundName] = useState('');
+  const [faceVisible, setFaceVisible] = useState(false);
 
-  const { facialDescriptors, config } = useAppStore();
-
+  const { config } = useAppStore();
   const minConfidence = parseFloat(config.reconhecimento_facial_min_confianca || '60') / 100;
   const autoConfidence = parseFloat(config.reconhecimento_facial_auto_confianca || '85') / 100;
 
-  // Intervalo entre detecções (ms). 300ms = ~3 FPS, suficiente e não trava.
-  const DETECTION_INTERVAL = 300;
-  // Timeout total da fase de scanning (ms)
-  const SCANNING_TIMEOUT_MS = 15000;
-  // Timeout da fase de liveness (ms)
-  const LIVENESS_TIMEOUT_MS = 6000;
-  // Piscadas necessárias (1 já é suficiente para anti-spoof básico)
-  const REQUIRED_BLINKS = 1;
-
-  // ==========================================
-  // INICIALIZAR CÂMERA
-  // ==========================================
+  // ── CÂMERA + MODELOS ───────────────────────────────────────
   useEffect(() => {
     let mounted = true;
 
     async function init() {
       try {
-        // Carregar modelos face-api.js
         await loadModels();
         if (!mounted) return;
-        setModelsReady(true);
 
-        // Abrir câmera (preferir câmera frontal do tablet)
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: 'user',
-            width: { ideal: 640 },
-            height: { ideal: 480 },
-            frameRate: { ideal: 30 },
-          },
+          video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
           audio: false,
         });
 
         if (!mounted) { stream.getTracks().forEach(t => t.stop()); return; }
-
         streamRef.current = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          videoRef.current.play();
-          setStatus('liveness');
-          startTimeRef.current = Date.now();
-        }
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+        setStatus('scanning');
       } catch (err) {
-        console.error('Erro câmera/modelos:', err);
-        if (mounted) {
-          if (err.name === 'NotAllowedError') {
-            onError?.('Permissão de câmera negada. Use o PIN.');
-          } else {
-            onError?.('Câmera não disponível. Use o PIN.');
-          }
-        }
+        if (!mounted) return;
+        onError?.(
+          err.name === 'NotAllowedError'
+            ? 'Câmera bloqueada. Use o PIN.'
+            : 'Câmera indisponível. Use o PIN.'
+        );
       }
     }
 
     init();
-
     return () => {
       mounted = false;
-      stopScanning();
+      stopLoop();
       streamRef.current?.getTracks().forEach(t => t.stop());
     };
   }, []);
 
-  // ==========================================
-  // LOOP DE DETECÇÃO (throttled)
-  // ==========================================
+  // ── LOOP ───────────────────────────────────────────────────
   useEffect(() => {
-    if (status === 'liveness' || status === 'scanning') {
-      phaseStartRef.current = Date.now();
-      startDetectionLoop();
+    if (status === 'scanning') {
+      attemptsRef.current = 0;
+      bestMatchRef.current = null;
+      apiCallRef.current = false;
+      startLoop();
     }
-    return () => stopScanning();
-  }, [status, facialDescriptors]);
+    return () => stopLoop();
+  }, [status]);
 
-  function stopScanning() {
+  function stopLoop() {
     runningRef.current = false;
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
   }
 
-  const startDetectionLoop = useCallback(() => {
-    stopScanning();
+  const startLoop = useCallback(() => {
+    stopLoop();
     runningRef.current = true;
 
     async function tick() {
       if (!runningRef.current) return;
 
-      // Aguardar vídeo pronto
       if (!videoRef.current || videoRef.current.readyState < 2) {
         timerRef.current = setTimeout(tick, 100);
         return;
       }
 
-      const tStart = performance.now();
+      const t0 = performance.now();
 
       try {
-        // Liveness usa versão LITE (sem descritor 128D) — ~3x mais rápida
-        const result = status === 'liveness'
-          ? await detectFaceLite(videoRef.current)
-          : await detectFace(videoRef.current);
+        const detected = await detectFace(videoRef.current);
 
-        if (result) {
-          const { box, landmarks } = result;
-          drawFaceBox(box);
-          setFaceBox(box);
+        if (detected) {
+          setFaceVisible(true);
+          drawBox(detected.box);
 
-          // ---- FASE 1: LIVENESS CHECK ----
-          if (status === 'liveness') {
-            const isBlink = detectBlink(landmarks);
+          // Não empilhar chamadas à API
+          if (!apiCallRef.current && attemptsRef.current < MAX_ATTEMPTS) {
+            apiCallRef.current = true;
+            const currentAttempt = attemptsRef.current + 1;
+            attemptsRef.current = currentAttempt;
+            setAttempt(currentAttempt);
 
-            if (isBlink && !blinkingRef.current) {
-              blinkingRef.current = true;
-              blinkCountRef.current += 1;
-              setLivenessMsg(`Piscada detectada! (${blinkCountRef.current}/${REQUIRED_BLINKS})`);
-            } else if (!isBlink) {
-              blinkingRef.current = false;
-            }
+            try {
+              const { data } = await timeRecordAPI.recognizeFace(Array.from(detected.descriptor));
+              const match = data.match;
 
-            const elapsed = Date.now() - phaseStartRef.current;
-            if (blinkCountRef.current >= REQUIRED_BLINKS || elapsed > LIVENESS_TIMEOUT_MS) {
-              setStatus('scanning');
-              return;
-            }
-          }
-
-          // ---- FASE 2: RECONHECIMENTO FACIAL ----
-          if (status === 'scanning') {
-            if (facialDescriptors.length === 0) {
-              setStatus('notfound');
-              setTimeout(() => onFail?.(), 1500);
-              return;
-            }
-
-            const match = matchFace(result.descriptor, facialDescriptors, 0.6);
-
-            if (match && match.confidence >= minConfidence) {
-              setStatus('found');
-              stopScanning();
-
-              if (match.confidence >= autoConfidence) {
-                onMatch?.(match.employee, match.confidence);
-              } else {
-                onLowConfidence?.(match.employee, match.confidence);
+              if (match && match.confidence > (bestMatchRef.current?.confidence ?? 0)) {
+                bestMatchRef.current = match;
+                setBestScore(match.confidencePercent);
               }
-              return;
+
+              // Resultado bom → confirmar imediatamente
+              if (bestMatchRef.current && bestMatchRef.current.confidence >= minConfidence) {
+                stopLoop();
+                setFoundName(bestMatchRef.current.nome);
+                setStatus('found');
+                const m = bestMatchRef.current;
+                setTimeout(() => {
+                  if (m.confidence >= autoConfidence) {
+                    onMatch?.(m, m.confidence);
+                  } else {
+                    onLowConfidence?.(m, m.confidence);
+                  }
+                }, 900);
+                return;
+              }
+            } catch {
+              // API timeout ou erro de rede — continua tentando
+            } finally {
+              apiCallRef.current = false;
             }
 
-            const elapsed = Date.now() - phaseStartRef.current;
-            if (elapsed > SCANNING_TIMEOUT_MS) {
-              setStatus('notfound');
-              stopScanning();
-              setTimeout(() => onFail?.(), 1500);
+            // Tentativas esgotadas
+            if (attemptsRef.current >= MAX_ATTEMPTS) {
+              stopLoop();
+              const m = bestMatchRef.current;
+              // Match parcial (≥ 40%) → tela de confirmação
+              if (m && m.confidence >= 0.4) {
+                setFoundName(m.nome);
+                setStatus('found');
+                setTimeout(() => onLowConfidence?.(m, m.confidence), 900);
+              } else {
+                setStatus('notfound');
+                setTimeout(() => onFail?.(), 1500);
+              }
               return;
             }
           }
         } else {
-          setFaceBox(null);
+          setFaceVisible(false);
           clearCanvas();
         }
-      } catch (err) {
-        console.error('Erro detecção:', err);
+      } catch {
+        // Erro de detecção — continua
       }
 
-      // Throttle: aguardar pelo menos DETECTION_INTERVAL entre detecções,
-      // descontando o tempo que a inferência levou
-      const elapsed = performance.now() - tStart;
-      const wait = Math.max(0, DETECTION_INTERVAL - elapsed);
+      const elapsed = performance.now() - t0;
       if (runningRef.current) {
-        timerRef.current = setTimeout(tick, wait);
+        timerRef.current = setTimeout(tick, Math.max(50, DETECT_INTERVAL - elapsed));
       }
     }
 
     tick();
-  }, [status, facialDescriptors, minConfidence, autoConfidence, onMatch, onLowConfidence, onFail]);
+  }, [minConfidence, autoConfidence, onMatch, onLowConfidence, onFail]);
 
-  // ==========================================
-  // CANVAS — desenhar bounding box
-  // ==========================================
-  function drawFaceBox(box) {
+  // ── CANVAS ─────────────────────────────────────────────────
+  function drawBox(box) {
     const canvas = canvasRef.current;
     const video = videoRef.current;
-    if (!canvas || !video) return;
+    if (!canvas || !video || !box) return;
 
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 480;
+
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    const color = status === 'found' ? '#22c55e' : status === 'notfound' ? '#ef4444' : '#818cf8';
-    const lineWidth = 3;
-
-    // Cantos do retângulo (estilo scanner)
     const { x, y, width: w, height: h } = box;
-    const cornerLen = Math.min(w, h) * 0.15;
+    const corner = Math.min(w, h) * 0.2;
+
+    const isFound = status === 'found';
+    const color = isFound ? '#22c55e' : '#6366f1';
 
     ctx.strokeStyle = color;
-    ctx.lineWidth = lineWidth;
+    ctx.lineWidth = 3;
     ctx.lineCap = 'round';
     ctx.shadowColor = color;
-    ctx.shadowBlur = 8;
+    ctx.shadowBlur = 14;
 
-    // Canto superior esquerdo
-    ctx.beginPath(); ctx.moveTo(x, y + cornerLen); ctx.lineTo(x, y); ctx.lineTo(x + cornerLen, y); ctx.stroke();
-    // Canto superior direito
-    ctx.beginPath(); ctx.moveTo(x + w - cornerLen, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w, y + cornerLen); ctx.stroke();
-    // Canto inferior esquerdo
-    ctx.beginPath(); ctx.moveTo(x, y + h - cornerLen); ctx.lineTo(x, y + h); ctx.lineTo(x + cornerLen, y + h); ctx.stroke();
-    // Canto inferior direito
-    ctx.beginPath(); ctx.moveTo(x + w - cornerLen, y + h); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w, y + h - cornerLen); ctx.stroke();
+    [
+      [[x, y + corner], [x, y], [x + corner, y]],
+      [[x + w - corner, y], [x + w, y], [x + w, y + corner]],
+      [[x, y + h - corner], [x, y + h], [x + corner, y + h]],
+      [[x + w - corner, y + h], [x + w, y + h], [x + w, y + h - corner]],
+    ].forEach(pts => {
+      ctx.beginPath();
+      ctx.moveTo(...pts[0]);
+      ctx.lineTo(...pts[1]);
+      ctx.lineTo(...pts[2]);
+      ctx.stroke();
+    });
   }
 
   function clearCanvas() {
@@ -260,130 +226,128 @@ export default function FaceScanner({ onMatch, onLowConfidence, onFail, onError 
     canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
   }
 
-  // ==========================================
-  // RENDER
-  // ==========================================
-  const statusMessages = {
-    loading: 'Iniciando câmera...',
-    liveness: livenessMsg,
-    scanning: 'Identificando funcionário...',
-    found: 'Funcionário identificado!',
-    notfound: 'Não reconhecido — redirecionando para PIN...',
-  };
-
-  const statusColors = {
-    loading: 'text-gray-400',
-    liveness: 'text-indigo-300',
-    scanning: 'text-blue-300',
-    found: 'text-green-400',
-    notfound: 'text-red-400',
-  };
+  // ── RENDER ─────────────────────────────────────────────────
+  const progress = Math.round((attempt / MAX_ATTEMPTS) * 100);
 
   return (
-    <div className="relative flex flex-col items-center gap-3">
-      {/* Área da câmera — limitada para não empurrar conteúdo abaixo da tela */}
-      <div className="relative w-full max-w-sm mx-auto rounded-3xl overflow-hidden shadow-2xl"
-           style={{ aspectRatio: '4/3', background: '#0a0a1e', maxHeight: '45vh' }}>
+    <div className="flex flex-col items-center gap-3 w-full">
 
-        {/* Vídeo */}
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted
-          className="w-full h-full object-cover"
-          style={{ transform: 'scaleX(-1)' }} /* Espelho para parecer natural */
-        />
+      {/* ── CÂMERA ── */}
+      <div className="relative w-full max-w-sm mx-auto rounded-2xl overflow-hidden bg-black shadow-2xl"
+           style={{ aspectRatio: '4/3', maxHeight: '44vh' }}>
 
-        {/* Canvas overlay (bounding boxes) */}
-        <canvas
-          ref={canvasRef}
-          className="absolute inset-0 w-full h-full"
-          style={{ transform: 'scaleX(-1)' }}
-        />
+        <video ref={videoRef} autoPlay playsInline muted
+               className="w-full h-full object-cover"
+               style={{ transform: 'scaleX(-1)' }} />
 
-        {/* Overlay de instruções (fase liveness) */}
-        {status === 'liveness' && (
-          <div className="absolute inset-0 pointer-events-none">
-            {/* Guia oval do rosto */}
-            <div className="face-overlay border-4 border-indigo-400/60 border-dashed"
-                 style={{ boxShadow: '0 0 30px rgba(79, 70, 229, 0.3) inset' }} />
-            {/* Linha de scan animada */}
-            <div className="absolute inset-0 overflow-hidden face-overlay">
-              <div className="scan-line" />
-            </div>
-          </div>
-        )}
+        <canvas ref={canvasRef}
+                className="absolute inset-0 w-full h-full pointer-events-none"
+                style={{ transform: 'scaleX(-1)' }} />
 
-        {/* Estado: câmera carregando */}
+        {/* Loading */}
         {status === 'loading' && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-dark-900/80">
-            <Camera className="w-16 h-16 text-indigo-400 animate-pulse" />
-            <p className="text-white/70 mt-3">Iniciando câmera...</p>
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/90 gap-3">
+            <Camera className="w-12 h-12 text-indigo-400 animate-pulse" />
+            <p className="text-white/50 text-sm">Iniciando câmera...</p>
           </div>
         )}
 
-        {/* Estado: encontrado */}
+        {/* Linha de scan animada (quando rosto detectado) */}
+        {status === 'scanning' && faceVisible && attempt > 0 && (
+          <div className="absolute inset-0 overflow-hidden pointer-events-none rounded-2xl">
+            <div className="scan-line-active" />
+          </div>
+        )}
+
+        {/* Identificado */}
         {status === 'found' && (
-          <div className="absolute inset-0 flex items-center justify-center bg-green-900/30">
-            <div className="success-icon text-center">
-              <div className="w-24 h-24 rounded-full bg-green-500/20 border-4 border-green-400 flex items-center justify-center mx-auto">
-                <svg className="w-12 h-12 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                </svg>
-              </div>
-            </div>
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-green-950/60 gap-2">
+            <CheckCircle className="w-16 h-16 text-green-400 drop-shadow-lg" />
+            <p className="text-green-300 font-semibold text-sm">{foundName}</p>
           </div>
         )}
 
-        {/* Estado: não reconhecido */}
+        {/* Não reconhecido */}
         {status === 'notfound' && (
-          <div className="absolute inset-0 flex items-center justify-center bg-red-900/30">
-            <div className="text-center">
-              <AlertCircle className="w-20 h-20 text-red-400 mx-auto" />
-              <p className="text-red-300 mt-2 font-medium">Redirecionar para PIN</p>
-            </div>
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-red-950/60 gap-2">
+            <AlertCircle className="w-14 h-14 text-red-400" />
+            <p className="text-red-300 text-sm">Não reconhecido</p>
           </div>
         )}
 
-        {/* Badge "AO VIVO" */}
-        {(status === 'liveness' || status === 'scanning') && (
-          <div className="absolute top-3 left-3 flex items-center gap-1.5 bg-black/50 rounded-full px-3 py-1">
-            <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+        {/* Badge AO VIVO */}
+        {status === 'scanning' && (
+          <div className="absolute top-2 left-2 flex items-center gap-1.5 bg-black/60 backdrop-blur-sm rounded-full px-2.5 py-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
             <span className="text-white text-xs font-medium">AO VIVO</span>
           </div>
         )}
-      </div>
 
-      {/* Mensagem de status */}
-      <div className="flex items-center gap-2 text-center">
-        {status === 'scanning' && (
-          <div className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+        {/* Barra de progresso (tentativas) */}
+        {status === 'scanning' && attempt > 0 && (
+          <div className="absolute bottom-0 inset-x-0 h-0.5 bg-white/10">
+            <div className="h-full bg-indigo-500 transition-all duration-500 ease-out"
+                 style={{ width: `${progress}%` }} />
+          </div>
         )}
-        <p className={`text-lg font-medium ${statusColors[status]}`}>
-          {statusMessages[status]}
-        </p>
       </div>
 
-      {/* Instrução de piscada (fase liveness) */}
-      {status === 'liveness' && (
-        <div className="flex gap-2">
-          {Array.from({ length: REQUIRED_BLINKS }, (_, i) => i + 1).map(i => (
-            <div key={i} className={`w-10 h-10 rounded-full border-2 flex items-center justify-center text-sm font-bold transition-all
-              ${blinkCountRef.current >= i ? 'bg-green-500 border-green-400 text-white' : 'border-white/30 text-white/40'}`}>
-              {i}
+      {/* ── STATUS ── */}
+      <div className="text-center min-h-[40px] flex flex-col items-center justify-center">
+        {status === 'loading' && (
+          <p className="text-white/40 text-sm">Carregando modelos...</p>
+        )}
+        {status === 'scanning' && !faceVisible && (
+          <p className="text-indigo-300 font-medium">Aproxime seu rosto da câmera</p>
+        )}
+        {status === 'scanning' && faceVisible && attempt === 0 && (
+          <div className="flex items-center gap-2 text-blue-300">
+            <Scan className="w-4 h-4 animate-pulse" />
+            <span className="font-medium">Analisando rosto...</span>
+          </div>
+        )}
+        {status === 'scanning' && faceVisible && attempt > 0 && (
+          <div className="flex flex-col items-center gap-0.5">
+            <div className="flex items-center gap-2 text-blue-300">
+              <div className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+              <span className="font-medium text-sm">Identificando... ({attempt}/{MAX_ATTEMPTS})</span>
             </div>
-          ))}
-        </div>
-      )}
+            {bestScore > 0 && (
+              <p className="text-white/30 text-xs">Melhor resultado: {bestScore}%</p>
+            )}
+          </div>
+        )}
+        {status === 'found' && (
+          <p className="text-green-400 font-bold">Identificado com sucesso!</p>
+        )}
+        {status === 'notfound' && (
+          <p className="text-red-400 font-medium">Rosto não reconhecido — redirecionando para PIN...</p>
+        )}
+      </div>
 
-      {/* Botão fallback PIN */}
       <button
-        onClick={() => { stopScanning(); onFail?.(); }}
-        className="text-white/50 hover:text-white/80 text-sm underline transition-colors mt-2"
+        onClick={() => { stopLoop(); onFail?.(); }}
+        className="text-white/30 hover:text-white/60 text-sm underline transition-colors"
       >
         Usar PIN em vez de rosto
       </button>
+
+      <style>{`
+        .scan-line-active {
+          position: absolute;
+          left: 0; right: 0;
+          height: 2px;
+          background: linear-gradient(90deg, transparent 0%, #6366f1 40%, #818cf8 50%, #6366f1 60%, transparent 100%);
+          box-shadow: 0 0 8px #6366f1;
+          animation: scanDown 1.8s ease-in-out infinite;
+        }
+        @keyframes scanDown {
+          0%   { top: 5%; opacity: 0; }
+          10%  { opacity: 1; }
+          90%  { opacity: 1; }
+          100% { top: 95%; opacity: 0; }
+        }
+      `}</style>
     </div>
   );
 }

@@ -26,7 +26,7 @@ export default function Terminal() {
   const navigate = useNavigate();
   const { timeStr, dateStr } = useClock();
   const isOnline = useOnlineStatus();
-  const { facialDescriptors, setFacialDescriptors, config } = useAppStore();
+  const { config } = useAppStore();
 
   const [phase, setPhase] = useState(PHASE.IDLE);
   const [identifiedEmployee, setIdentifiedEmployee] = useState(null);
@@ -34,30 +34,13 @@ export default function Terminal() {
   const [lastPunch, setLastPunch] = useState(null);
   const [adminTaps, setAdminTaps] = useState(0); // Toque secreto para acessar admin
 
-  // ==========================================
-  // CARREGAR DESCRITORES FACIAIS AO MONTAR
-  // ==========================================
+  // Iniciar câmera automaticamente após 2s no idle
   useEffect(() => {
-    loadFacialDescriptors();
-
-    // Iniciar câmera automaticamente após 2s no idle
     const timer = setTimeout(() => {
       if (phase === PHASE.IDLE) setPhase(PHASE.SCANNING);
     }, 2000);
-
     return () => clearTimeout(timer);
   }, []);
-
-  async function loadFacialDescriptors() {
-    try {
-      const { data } = await employeeAPI.getFacialDescriptors();
-      setFacialDescriptors(data);
-      console.log(`${data.length} descritores faciais carregados`);
-    } catch (err) {
-      console.warn('Não foi possível carregar descritores:', err.message);
-      // Funcionar offline com descritores do cache do store
-    }
-  }
 
   // ==========================================
   // TOQUE SECRETO PARA ADMIN (5 toques no logo)
