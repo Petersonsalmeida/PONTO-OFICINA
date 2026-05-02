@@ -16,7 +16,7 @@ export default function FaceCadastro({ employee, onClose, onSaved }) {
   const [progress, setProgress] = useState(0);
   const [message, setMessage] = useState('Iniciando câmera...');
   const [saving, setSaving] = useState(false);
-  const [descriptor, setDescriptor] = useState(null);
+  const [descriptors, setDescriptors] = useState(null);
 
   useEffect(() => {
     startCamera();
@@ -51,7 +51,7 @@ export default function FaceCadastro({ employee, onClose, onSaved }) {
     try {
       const result = await captureMultipleDescriptors(
         videoRef.current,
-        5,
+        7,
         (i, total) => {
           setProgress(Math.round((i / total) * 100));
           const msgs = [
@@ -60,12 +60,14 @@ export default function FaceCadastro({ employee, onClose, onSaved }) {
             'Vire levemente para a direita...',
             'Incline a cabeça para cima...',
             'Incline a cabeça para baixo...',
+            'Sorria levemente...',
+            'Volte ao normal, olhe para a câmera...',
           ];
           setMessage(msgs[i] || 'Capturando...');
         }
       );
 
-      setDescriptor(result.descriptor);
+      setDescriptors(result.descriptors);
       setStep('done');
       setMessage(`${result.samplesCount} capturas realizadas com sucesso!`);
       setProgress(100);
@@ -77,10 +79,13 @@ export default function FaceCadastro({ employee, onClose, onSaved }) {
   }
 
   async function handleSave() {
-    if (!descriptor) return;
+    if (!descriptors || descriptors.length === 0) return;
     setSaving(true);
     try {
-      await employeeAPI.saveFacialTemplate(employee.id, Array.from(descriptor));
+      // Envia a lista completa de descritores. O matchFace compara
+      // contra o melhor (menor distância), o que é muito mais robusto
+      // que a média 128D (que degrada o reconhecimento).
+      await employeeAPI.saveFacialTemplate(employee.id, descriptors);
       toast.success(`Template facial de ${employee.nome} salvo!`);
       onSaved?.();
     } catch (err) {

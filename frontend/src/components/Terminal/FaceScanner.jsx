@@ -1,12 +1,18 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { Camera, Scan, AlertCircle } from 'lucide-react';
 import {
-  loadModels, detectFace, matchFace, detectBlink,
+  loadModels, detectFace, detectFaceLite, matchFace, detectBlink,
 } from '../../services/faceRecognition';
 import { useAppStore } from '../../stores/appStore';
 
 /**
  * FaceScanner — câmera ativa com reconhecimento facial em tempo real.
+ *
+ * Estratégia de performance:
+ *  - Detecção throttled em ~3 FPS (300ms entre frames). Inferência TF.js
+ *    é pesada; rodar a 60 FPS trava o navegador.
+ *  - Fase liveness usa detectFaceLite (sem descritor 128D) — ~3x mais rápida.
+ *  - Fase scanning usa detectFace completo apenas quando precisa.
  *
  * Props:
  *  onMatch(employee, confidence) — rosto reconhecido com alta confiança
@@ -17,12 +23,13 @@ import { useAppStore } from '../../stores/appStore';
 export default function FaceScanner({ onMatch, onLowConfidence, onFail, onError }) {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
-  const rafRef = useRef(null);
+  const timerRef = useRef(null);
   const streamRef = useRef(null);
   const blinkCountRef = useRef(0);
   const blinkingRef = useRef(false);
   const startTimeRef = useRef(Date.now());
-  const lastDetectionRef = useRef(null);
+  const phaseStartRef = useRef(Date.now());
+  const runningRef = useRef(false);
 
   const [status, setStatus] = useState('loading'); // loading | liveness | scanning | found | notfound
   const [livenessMsg, setLivenessMsg] = useState('Pisque os olhos para verificar que é você');
@@ -33,6 +40,15 @@ export default function FaceScanner({ onMatch, onLowConfidence, onFail, onError 
 
   const minConfidence = parseFloat(config.reconhecimento_facial_min_confianca || '60') / 100;
   const autoConfidence = parseFloat(config.reconhecimento_facial_auto_confianca || '85') / 100;
+
+  // Intervalo entre detecções (ms). 300ms = ~3 FPS, suficiente e não trava.
+  const DETECTION_INTERVAL = 300;
+  // Timeout total da fase de scanning (ms)
+  const SCANNING_TIMEOUT_MS = 15000;
+  // Timeout da fase de liveness (ms)
+  const LIVENESS_TIMEOUT_MS = 6000;
+  // Piscadas necessárias (1 já é suficiente para anti-spoof básico)
+  const REQUIRED_BLINKS = 1;
 
   // ==========================================
   // INICIALIZAR CÂMERA
@@ -89,39 +105,47 @@ export default function FaceScanner({ onMatch, onLowConfidence, onFail, onError 
   }, []);
 
   // ==========================================
-  // LOOP DE DETECÇÃO
+  // LOOP DE DETECÇÃO (throttled)
   // ==========================================
   useEffect(() => {
     if (status === 'liveness' || status === 'scanning') {
+      phaseStartRef.current = Date.now();
       startDetectionLoop();
     }
     return () => stopScanning();
   }, [status, facialDescriptors]);
 
   function stopScanning() {
-    if (rafRef.current) {
-      cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
+    runningRef.current = false;
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
     }
   }
 
   const startDetectionLoop = useCallback(() => {
     stopScanning();
+    runningRef.current = true;
 
-    async function loop() {
+    async function tick() {
+      if (!runningRef.current) return;
+
+      // Aguardar vídeo pronto
       if (!videoRef.current || videoRef.current.readyState < 2) {
-        rafRef.current = requestAnimationFrame(loop);
+        timerRef.current = setTimeout(tick, 100);
         return;
       }
 
+      const tStart = performance.now();
+
       try {
-        const result = await detectFace(videoRef.current);
+        // Liveness usa versão LITE (sem descritor 128D) — ~3x mais rápida
+        const result = status === 'liveness'
+          ? await detectFaceLite(videoRef.current)
+          : await detectFace(videoRef.current);
 
         if (result) {
-          const { box, landmarks, descriptor } = result;
-          lastDetectionRef.current = result;
-
-          // Mostrar bounding box no canvas
+          const { box, landmarks } = result;
           drawFaceBox(box);
           setFaceBox(box);
 
@@ -132,14 +156,13 @@ export default function FaceScanner({ onMatch, onLowConfidence, onFail, onError 
             if (isBlink && !blinkingRef.current) {
               blinkingRef.current = true;
               blinkCountRef.current += 1;
-              setLivenessMsg(`Piscada detectada! (${blinkCountRef.current}/2)`);
+              setLivenessMsg(`Piscada detectada! (${blinkCountRef.current}/${REQUIRED_BLINKS})`);
             } else if (!isBlink) {
               blinkingRef.current = false;
             }
 
-            // Após 2 piscadas OU timeout de 8s, avançar para reconhecimento
-            const elapsed = (Date.now() - startTimeRef.current) / 1000;
-            if (blinkCountRef.current >= 2 || elapsed > 8) {
+            const elapsed = Date.now() - phaseStartRef.current;
+            if (blinkCountRef.current >= REQUIRED_BLINKS || elapsed > LIVENESS_TIMEOUT_MS) {
               setStatus('scanning');
               return;
             }
@@ -148,31 +171,27 @@ export default function FaceScanner({ onMatch, onLowConfidence, onFail, onError 
           // ---- FASE 2: RECONHECIMENTO FACIAL ----
           if (status === 'scanning') {
             if (facialDescriptors.length === 0) {
-              // Sem funcionários cadastrados, ir para PIN
               setStatus('notfound');
               setTimeout(() => onFail?.(), 1500);
               return;
             }
 
-            const match = matchFace(descriptor, facialDescriptors, 0.6);
+            const match = matchFace(result.descriptor, facialDescriptors, 0.6);
 
             if (match && match.confidence >= minConfidence) {
               setStatus('found');
               stopScanning();
 
               if (match.confidence >= autoConfidence) {
-                // Confiança alta: registrar automaticamente
                 onMatch?.(match.employee, match.confidence);
               } else {
-                // Confiança média: pedir confirmação
                 onLowConfidence?.(match.employee, match.confidence);
               }
               return;
             }
 
-            // Timeout de 10s sem match
-            const elapsed = (Date.now() - startTimeRef.current) / 1000;
-            if (elapsed > 10) {
+            const elapsed = Date.now() - phaseStartRef.current;
+            if (elapsed > SCANNING_TIMEOUT_MS) {
               setStatus('notfound');
               stopScanning();
               setTimeout(() => onFail?.(), 1500);
@@ -187,10 +206,16 @@ export default function FaceScanner({ onMatch, onLowConfidence, onFail, onError 
         console.error('Erro detecção:', err);
       }
 
-      rafRef.current = requestAnimationFrame(loop);
+      // Throttle: aguardar pelo menos DETECTION_INTERVAL entre detecções,
+      // descontando o tempo que a inferência levou
+      const elapsed = performance.now() - tStart;
+      const wait = Math.max(0, DETECTION_INTERVAL - elapsed);
+      if (runningRef.current) {
+        timerRef.current = setTimeout(tick, wait);
+      }
     }
 
-    rafRef.current = requestAnimationFrame(loop);
+    tick();
   }, [status, facialDescriptors, minConfidence, autoConfidence, onMatch, onLowConfidence, onFail]);
 
   // ==========================================
@@ -343,7 +368,7 @@ export default function FaceScanner({ onMatch, onLowConfidence, onFail, onError 
       {/* Instrução de piscada (fase liveness) */}
       {status === 'liveness' && (
         <div className="flex gap-2">
-          {[1, 2].map(i => (
+          {Array.from({ length: REQUIRED_BLINKS }, (_, i) => i + 1).map(i => (
             <div key={i} className={`w-10 h-10 rounded-full border-2 flex items-center justify-center text-sm font-bold transition-all
               ${blinkCountRef.current >= i ? 'bg-green-500 border-green-400 text-white' : 'border-white/30 text-white/40'}`}>
               {i}

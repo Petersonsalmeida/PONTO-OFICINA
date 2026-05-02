@@ -6,7 +6,6 @@
  *  - tiny_face_detector
  *  - face_landmark_68
  *  - face_recognition
- *  - face_expression
  */
 import * as faceapi from 'face-api.js';
 
@@ -15,87 +14,114 @@ const MODELS_PATH = '/models';
 let modelsLoaded = false;
 let loadingPromise = null;
 
+const detectorOptions = new faceapi.TinyFaceDetectorOptions({
+  inputSize: 320,
+  scoreThreshold: 0.5,
+});
+
 /**
- * Carrega os modelos da face-api.js (lazy, uma vez)
+ * Carrega os modelos da face-api.js (lazy, uma vez).
+ * Modelo de expressões removido — não é necessário para o fluxo de ponto.
  */
 export async function loadModels() {
   if (modelsLoaded) return;
   if (loadingPromise) return loadingPromise;
 
   loadingPromise = (async () => {
-    console.log('Carregando modelos de reconhecimento facial...');
+    console.log('[face] Carregando modelos...');
+    const t0 = performance.now();
     await Promise.all([
       faceapi.nets.tinyFaceDetector.loadFromUri(MODELS_PATH),
       faceapi.nets.faceLandmark68Net.loadFromUri(MODELS_PATH),
       faceapi.nets.faceRecognitionNet.loadFromUri(MODELS_PATH),
-      faceapi.nets.faceExpressionNet.loadFromUri(MODELS_PATH),
     ]);
     modelsLoaded = true;
-    console.log('Modelos carregados com sucesso');
+    console.log(`[face] Modelos carregados em ${Math.round(performance.now() - t0)}ms`);
   })();
 
   return loadingPromise;
 }
 
 /**
- * Detecta rosto no elemento de vídeo/imagem e retorna o descritor.
- * @param {HTMLVideoElement|HTMLImageElement} input
- * @returns {{ descriptor: Float32Array, detection: object } | null}
+ * Detecção LITE — só detector + landmarks. Usada na fase de liveness
+ * (detecção de piscada). É bem mais rápida que a versão completa.
+ */
+export async function detectFaceLite(input) {
+  await loadModels();
+  const result = await faceapi
+    .detectSingleFace(input, detectorOptions)
+    .withFaceLandmarks();
+  if (!result) return null;
+  return {
+    landmarks: result.landmarks,
+    box: result.detection.box,
+    detection: result.detection,
+  };
+}
+
+/**
+ * Detecção FULL — detector + landmarks + descritor 128D.
+ * Usada na fase de reconhecimento (mais pesada).
  */
 export async function detectFace(input) {
   await loadModels();
-
-  const options = new faceapi.TinyFaceDetectorOptions({
-    inputSize: 416,
-    scoreThreshold: 0.5,
-  });
-
   const result = await faceapi
-    .detectSingleFace(input, options)
+    .detectSingleFace(input, detectorOptions)
     .withFaceLandmarks()
-    .withFaceDescriptor()
-    .withFaceExpressions();
-
+    .withFaceDescriptor();
   if (!result) return null;
-
   return {
     descriptor: result.descriptor,
     detection: result.detection,
     landmarks: result.landmarks,
-    expressions: result.expressions,
     box: result.detection.box,
   };
 }
 
 /**
- * Compara um descritor com uma lista de descritores cadastrados.
- * @param {Float32Array} queryDescriptor - Descritor da pessoa a identificar
- * @param {Array<{id, nome, descriptor}>} registeredDescriptors
- * @param {number} threshold - Distância máxima para match (0.5 padrão)
- * @returns {{ employee: object, distance: number, confidence: number } | null}
+ * Compara um descritor com a lista de funcionários cadastrados.
+ *
+ * Cada funcionário pode ter:
+ *  - 1 descritor (formato legado): Float32Array ou array 1D de 128 floats
+ *  - N descritores (novo formato): array de arrays — pega o melhor match
+ *
+ * @param {Float32Array} queryDescriptor
+ * @param {Array<{id, nome, descriptor: Array}>} registered
+ * @param {number} threshold - distância máxima (face-api.js padrão: 0.6)
  */
-export function matchFace(queryDescriptor, registeredDescriptors, threshold = 0.5) {
-  if (!registeredDescriptors || registeredDescriptors.length === 0) return null;
+export function matchFace(queryDescriptor, registered, threshold = 0.6) {
+  if (!registered || registered.length === 0) return null;
 
   let bestMatch = null;
   let bestDistance = Infinity;
 
-  for (const { id, nome, descriptor } of registeredDescriptors) {
-    // Converter array para Float32Array se necessário
-    const d = descriptor instanceof Float32Array ? descriptor : new Float32Array(descriptor);
-    const distance = faceapi.euclideanDistance(queryDescriptor, d);
+  for (const item of registered) {
+    const { id, nome, descriptor } = item;
+    if (!descriptor || !descriptor.length) continue;
 
-    if (distance < bestDistance) {
-      bestDistance = distance;
-      bestMatch = { id, nome };
+    // Detecta se é multi-descritor (array de arrays) ou descritor único
+    const isMulti = Array.isArray(descriptor[0]) || ArrayBuffer.isView(descriptor[0]);
+    const variants = isMulti ? descriptor : [descriptor];
+
+    for (const variant of variants) {
+      const d = variant instanceof Float32Array ? variant : new Float32Array(variant);
+      const distance = faceapi.euclideanDistance(queryDescriptor, d);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestMatch = { id, nome };
+      }
     }
   }
 
   if (bestDistance > threshold) return null;
 
-  // Converter distância em confiança (0-1)
-  // distância 0 = 100%, distância threshold = 0%
-  const confidence = Math.max(0, 1 - (bestDistance / threshold));
+  // Escala natural alinhada com face-api.js:
+  //   distance 0.0 → 100%   (rosto idêntico)
+  //   distance 0.3 → 70%    (match excelente)
+  //   distance 0.4 → 60%    (match bom)
+  //   distance 0.5 → 50%    (match razoável)
+  //   distance 0.6 → 40%    (limite)
+  const confidence = Math.max(0, 1 - bestDistance);
 
   return {
     employee: bestMatch,
@@ -110,19 +136,15 @@ export function matchFace(queryDescriptor, registeredDescriptors, threshold = 0.
 // ==========================================
 
 /**
- * Detecta piscada de olhos analisando a abertura dos olhos.
- * Usa a proporção Eye Aspect Ratio (EAR).
+ * Detecta piscada de olhos pela proporção EAR (Eye Aspect Ratio).
  */
 export function detectBlink(landmarks) {
   if (!landmarks) return false;
   const positions = landmarks.positions;
-
-  // Olho esquerdo: pontos 36-41, Olho direito: pontos 42-47
   const leftEyeEAR = eyeAspectRatio(positions.slice(36, 42));
   const rightEyeEAR = eyeAspectRatio(positions.slice(42, 48));
   const avgEAR = (leftEyeEAR + rightEyeEAR) / 2;
-
-  return avgEAR < 0.2; // Olho fechado
+  return avgEAR < 0.2;
 }
 
 function eyeAspectRatio(eyePoints) {
@@ -138,72 +160,29 @@ function dist(p1, p2) {
 }
 
 /**
- * Challenge de Liveness: verifica movimento de cabeça.
- * Retorna ângulo de rotação horizontal.
- */
-export function detectHeadPose(landmarks) {
-  if (!landmarks) return 0;
-  const positions = landmarks.positions;
-
-  // Usar ponta do nariz (30) e pontos da mandíbula para calcular rotação
-  const noseTip = positions[30];
-  const chinLeft = positions[3];
-  const chinRight = positions[13];
-
-  if (!noseTip || !chinLeft || !chinRight) return 0;
-
-  const faceCenter = { x: (chinLeft.x + chinRight.x) / 2, y: (chinLeft.y + chinRight.y) / 2 };
-  const angle = Math.atan2(noseTip.x - faceCenter.x, noseTip.y - faceCenter.y) * (180 / Math.PI);
-  return angle;
-}
-
-/**
  * Extrai múltiplos descritores de um vídeo (para cadastro).
- * Captura N frames em intervalos para variar ângulos.
+ * Salva a LISTA de descritores em vez da média — descritores faciais
+ * 128D não são linearmente combináveis e a média degrada o reconhecimento.
  */
-export async function captureMultipleDescriptors(videoElement, count = 5, onProgress) {
+export async function captureMultipleDescriptors(videoElement, count = 7, onProgress) {
   const descriptors = [];
-  const interval = 800; // ms entre capturas
+  const interval = 700;
 
   for (let i = 0; i < count; i++) {
     if (onProgress) onProgress(i, count);
-
-    // Aguardar intervalo para capturar frames diferentes
     await new Promise(r => setTimeout(r, interval));
-
     const result = await detectFace(videoElement);
-    if (result) {
-      descriptors.push(result.descriptor);
-    }
+    if (result) descriptors.push(Array.from(result.descriptor));
   }
 
-  if (descriptors.length === 0) {
-    throw new Error('Nenhum rosto detectado nas capturas');
+  if (descriptors.length < 3) {
+    throw new Error(
+      `Apenas ${descriptors.length} captura(s) válida(s). ` +
+      `Verifique iluminação e posicionamento do rosto.`
+    );
   }
 
-  // Calcular descritor médio (mais estável)
-  const avgDescriptor = averageDescriptors(descriptors);
-  return { descriptor: avgDescriptor, samplesCount: descriptors.length };
-}
-
-/**
- * Calcula a média de múltiplos descritores (vetor 128D)
- */
-function averageDescriptors(descriptors) {
-  const size = 128;
-  const avg = new Float32Array(size);
-
-  for (const d of descriptors) {
-    for (let i = 0; i < size; i++) {
-      avg[i] += d[i];
-    }
-  }
-
-  for (let i = 0; i < size; i++) {
-    avg[i] /= descriptors.length;
-  }
-
-  return avg;
+  return { descriptors, samplesCount: descriptors.length };
 }
 
 export { modelsLoaded };

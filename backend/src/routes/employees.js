@@ -168,8 +168,20 @@ router.put('/:id', requireAuth, requireProfile('super_admin', 'rh_gestor'), (req
 router.post('/:id/facial-template', requireAuth, requireProfile('super_admin', 'rh_gestor'), (req, res) => {
   const { descriptor } = req.body;
 
-  if (!descriptor || !Array.isArray(descriptor)) {
+  if (!descriptor || !Array.isArray(descriptor) || descriptor.length === 0) {
     return res.status(400).json({ error: 'Descriptor facial inválido' });
+  }
+
+  // Aceita tanto formato legado (array 1D de 128 floats)
+  // quanto novo formato (array de N descritores 128D)
+  const isMulti = Array.isArray(descriptor[0]);
+  const expectedLen = 128;
+  const samples = isMulti ? descriptor : [descriptor];
+  const allValid = samples.every(s => Array.isArray(s) && s.length === expectedLen);
+  if (!allValid) {
+    return res.status(400).json({
+      error: `Cada descritor deve ter exatamente ${expectedLen} dimensões`,
+    });
   }
 
   const db = getDb();
