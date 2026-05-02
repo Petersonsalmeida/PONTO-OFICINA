@@ -118,7 +118,7 @@ async function generatePDF(employeeId, dataInicio, dataFim) {
     const schedule = db.prepare('SELECT * FROM work_schedules WHERE employee_id = ? AND data = ?').get(employeeId, dateStr);
 
     const dow = d.getDay();
-    const isDayOff = dow === 0 || (schedule && schedule.tipo_dia === 'folga');
+    const isDayOff = dow === 0 || dow === 6 || (schedule && schedule.tipo_dia === 'folga');
     const isFeriado = !!holiday;
 
     const byType = {};
@@ -363,7 +363,7 @@ async function generateExcel(employeeId, dataInicio, dataFim) {
     const totals = dayRecords.length > 0 ? calcDayTotals(dayRecords, schedule) : null;
     let obs = '';
     if (holiday) obs = `Feriado: ${holiday.nome}`;
-    else if (dow === 0) obs = 'Domingo';
+    else if (dow === 0 || dow === 6) obs = 'Folga';
     else if (dayRecords.length === 0) obs = 'FALTA';
 
     ws2.addRow({
