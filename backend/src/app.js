@@ -33,8 +33,10 @@ app.use(helmet({
   contentSecurityPolicy: false, // Permitir PWA
 }));
 app.use(compression());
+const corsOrigin = process.env.CORS_ORIGIN ||
+  (process.env.NODE_ENV === 'production' ? 'https://ponto.centroautoalianca.com.br' : '*');
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || '*',
+  origin: corsOrigin,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
