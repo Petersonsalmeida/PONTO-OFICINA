@@ -280,10 +280,10 @@ export default function FaceScanner({ onMatch, onLowConfidence, onFail, onError 
   };
 
   return (
-    <div className="relative flex flex-col items-center gap-4">
-      {/* Área da câmera */}
-      <div className="relative w-full max-w-lg mx-auto rounded-3xl overflow-hidden shadow-2xl"
-           style={{ aspectRatio: '4/3', background: '#0a0a1e' }}>
+    <div className="relative flex flex-col items-center gap-3">
+      {/* Área da câmera — limitada para não empurrar conteúdo abaixo da tela */}
+      <div className="relative w-full max-w-sm mx-auto rounded-3xl overflow-hidden shadow-2xl"
+           style={{ aspectRatio: '4/3', background: '#0a0a1e', maxHeight: '45vh' }}>
 
         {/* Vídeo */}
         <video

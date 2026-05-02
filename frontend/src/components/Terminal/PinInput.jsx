@@ -67,22 +67,22 @@ export default function PinInput({ onSuccess, onCancel }) {
   }, [pin, loading]);
 
   return (
-    <div className="flex flex-col items-center gap-8 w-full max-w-xs mx-auto">
-      {/* Header */}
+    <div className="flex flex-col items-center gap-4 w-full max-w-xs mx-auto">
+      {/* Header compacto */}
       <div className="text-center">
-        <div className="w-16 h-16 rounded-full bg-indigo-600/20 border border-indigo-500/40 flex items-center justify-center mx-auto mb-4">
-          <Lock className="w-8 h-8 text-indigo-400" />
+        <div className="w-12 h-12 rounded-full bg-indigo-600/20 border border-indigo-500/40 flex items-center justify-center mx-auto mb-2">
+          <Lock className="w-6 h-6 text-indigo-400" />
         </div>
-        <h2 className="text-2xl font-bold text-white">Digite seu PIN</h2>
-        <p className="text-white/50 text-sm mt-1">4 a 6 dígitos</p>
+        <h2 className="text-xl font-bold text-white">Digite seu PIN</h2>
+        <p className="text-white/50 text-xs mt-0.5">4 a 6 dígitos</p>
       </div>
 
       {/* Display do PIN */}
-      <div className={`flex gap-3 ${shake ? 'animate-bounce' : ''}`}
+      <div className={`flex gap-2 ${shake ? 'animate-bounce' : ''}`}
            style={{ animation: shake ? 'shake 0.5s ease-in-out' : '' }}>
         {Array.from({ length: Math.max(4, pin.length) }).map((_, i) => (
           <div key={i}
-               className={`w-12 h-14 rounded-xl border-2 flex items-center justify-center transition-all duration-200
+               className={`w-11 h-12 rounded-xl border-2 flex items-center justify-center transition-all duration-200
                  ${i < pin.length
                    ? 'border-indigo-400 bg-indigo-600/20'
                    : 'border-white/20 bg-white/5'}`}>
@@ -94,14 +94,14 @@ export default function PinInput({ onSuccess, onCancel }) {
       </div>
 
       {/* Teclado numérico */}
-      <div className="grid grid-cols-3 gap-3 w-full">
+      <div className="grid grid-cols-3 gap-2 w-full">
         {keys.map((key, idx) => (
           <button
             key={idx}
             onClick={() => key !== '' ? handleKey(key) : null}
             disabled={loading || (key !== '<' && key !== '' && pin.length >= maxLen)}
             className={`
-              h-18 py-5 rounded-2xl text-2xl font-bold transition-all duration-150 select-none
+              py-4 rounded-2xl text-2xl font-bold transition-all duration-150 select-none
               ${key === '' ? 'invisible' : ''}
               ${key === '<'
                 ? 'bg-white/10 text-red-300 hover:bg-red-900/30 active:scale-95'
