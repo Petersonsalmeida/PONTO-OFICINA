@@ -110,6 +110,91 @@ async function checkJornadaAberta() {
 }
 
 /**
+ * Verifica esquecimento de ponto.
+ * Para cada batida prevista (saida_almoco, retorno_almoco, saida), se o
+ * horário previsto já passou + tolerância e o funcionário ainda não registrou,
+ * dispara um lembrete via WhatsApp.
+ *
+ * Diferente de checkAtrasos (que olha só entrada) e checkJornadaAberta (que
+ * olha só horas absolutas), este checa cada etapa da jornada vs schedule do dia.
+ */
+async function checkEsquecimentoPonto() {
+  const db = getDb();
+  const now = new Date();
+  const today = now.toISOString().split('T')[0];
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+
+  // Feature flag — permite desativar via config
+  const ativoCfg = db.prepare("SELECT valor FROM company_config WHERE chave = 'alerta_esquecimento_ativo'").get();
+  if (ativoCfg && ativoCfg.valor === '0') return;
+
+  const tolCfg = db.prepare("SELECT valor FROM company_config WHERE chave = 'alerta_esquecimento_min'").get();
+  const tolerancia = parseInt(tolCfg?.valor || '15');
+
+  const schedules = db.prepare(`
+    SELECT ws.*, e.id as employee_id, e.nome, e.cargo, e.telefone
+    FROM work_schedules ws
+    JOIN employees e ON e.id = ws.employee_id
+    WHERE ws.data = ? AND ws.tipo_dia = 'normal' AND e.ativo = 1
+  `).all(today);
+
+  // Apenas tipos com horário previsto na escala — entrada já é tratada por checkAtrasos
+  const stages = [
+    { tipo: 'saida_almoco',    campo: 'saida_almoco_prevista' },
+    { tipo: 'retorno_almoco',  campo: 'retorno_almoco_previsto' },
+    { tipo: 'saida',           campo: 'saida_prevista' },
+  ];
+
+  for (const schedule of schedules) {
+    // Se nem entrou ainda, deixa o checkAtrasos cuidar
+    const entrou = db.prepare(`
+      SELECT id FROM time_records
+      WHERE employee_id = ? AND data = ? AND tipo = 'entrada'
+    `).get(schedule.employee_id, today);
+    if (!entrou) continue;
+
+    for (const stage of stages) {
+      const horarioPrevisto = schedule[stage.campo];
+      if (!horarioPrevisto) continue;
+
+      const [h, m] = String(horarioPrevisto).split(':').map(Number);
+      if (Number.isNaN(h) || Number.isNaN(m)) continue;
+
+      const previstoMin = h * 60 + m;
+      const minutosAtraso = nowMin - previstoMin;
+      if (minutosAtraso < tolerancia) continue;
+
+      // Não enviar lembretes de mais de 4h depois — provavelmente o
+      // funcionário não vai mais bater (o checkJornadaAberta cuida desse caso)
+      if (minutosAtraso > 240) continue;
+
+      const alertKey = `esquec_${schedule.employee_id}_${stage.tipo}_${today}`;
+      if (alertsSent.has(alertKey)) continue;
+
+      // Verificar se já bateu
+      const batida = db.prepare(`
+        SELECT id FROM time_records
+        WHERE employee_id = ? AND data = ? AND tipo = ?
+      `).get(schedule.employee_id, today, stage.tipo);
+      if (batida) continue;
+
+      alertsSent.add(alertKey);
+      try {
+        await whatsappService.alertEsquecimento(
+          { id: schedule.employee_id, nome: schedule.nome, cargo: schedule.cargo, telefone: schedule.telefone },
+          stage.tipo,
+          horarioPrevisto,
+          minutosAtraso,
+        );
+        logger.info(`Alerta esquecimento enviado: ${schedule.nome} (${stage.tipo}, ${minutosAtraso}min)`);
+      } catch (err) {
+        logger.error(`Erro alerta esquecimento ${schedule.nome}: ${err.message}`);
+      }
+    }
+  }
+}
+
+/**
  * Limpa cache de alertas à meia-noite
  */
 function clearAlertCache() {
@@ -126,6 +211,11 @@ function startScheduler() {
     checkAtrasos().catch(err => logger.error(`Cron atraso: ${err.message}`));
   });
 
+  // Verificar esquecimento de ponto a cada 5 minutos
+  cron.schedule('*/5 * * * *', () => {
+    checkEsquecimentoPonto().catch(err => logger.error(`Cron esquecimento: ${err.message}`));
+  });
+
   // Verificar jornadas abertas a cada 30 minutos
   cron.schedule('*/30 * * * *', () => {
     checkJornadaAberta().catch(err => logger.error(`Cron jornada: ${err.message}`));
@@ -137,4 +227,4 @@ function startScheduler() {
   logger.info('Scheduler de alertas ativado');
 }
 
-module.exports = { startScheduler, checkAtrasos, checkJornadaAberta };
+module.exports = { startScheduler, checkAtrasos, checkJornadaAberta, checkEsquecimentoPonto };

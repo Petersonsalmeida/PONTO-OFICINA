@@ -109,6 +109,7 @@ export const configAPI = {
   update: (data) => api.put('/config', data),
   holidays: (params) => api.get('/config/holidays', { params }),
   addHoliday: (data) => api.post('/config/holidays', data),
+  checkAlerts: (tipo) => api.post('/config/check-alerts', { tipo }),
 };
 
 export default api;

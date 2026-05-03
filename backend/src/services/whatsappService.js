@@ -144,7 +144,41 @@ async function alertJornadaAberta(employee, horasAberto) {
   }
 }
 
+/**
+ * Alerta de esquecimento de ponto (saída almoço, retorno almoço ou saída final).
+ * tipoBatida: 'saida_almoco' | 'retorno_almoco' | 'saida'
+ */
+const TIPO_LABELS = {
+  saida_almoco: 'Saída para almoço',
+  retorno_almoco: 'Retorno do almoço',
+  saida: 'Saída final',
+};
+
+async function alertEsquecimento(employee, tipoBatida, horarioPrevisto, minutosAtraso) {
+  const label = TIPO_LABELS[tipoBatida] || tipoBatida;
+
+  const msg = `🔔 *Lembrete de Ponto*\n\n` +
+    `Olá ${employee.nome}!\n\n` +
+    `Você ainda não registrou: *${label}*\n` +
+    `Horário previsto: ${horarioPrevisto}\n` +
+    `Atraso: ${minutosAtraso} minuto${minutosAtraso === 1 ? '' : 's'}\n\n` +
+    `Por favor, vá até o terminal e registre seu ponto agora.\n\n` +
+    `_Centro Automotivo Aliança_`;
+
+  await sendAlert('esquecimento_ponto', {
+    funcionario: employee.nome,
+    employee_id: employee.id,
+    tipo: tipoBatida,
+    horarioPrevisto,
+    minutosAtraso,
+  });
+
+  if (employee.telefone) {
+    try { await sendText(employee.telefone, msg); } catch { /* ignora */ }
+  }
+}
+
 module.exports = {
   sendText, sendDocument, sendTimesheet,
-  sendAlert, alertAtraso, alertJornadaAberta,
+  sendAlert, alertAtraso, alertJornadaAberta, alertEsquecimento,
 };

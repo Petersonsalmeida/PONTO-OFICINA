@@ -241,6 +241,8 @@ const migrate = db.transaction(() => {
     ['tolerancia_saida_min', '5', 'Tolerância de saída antecipada (minutos)'],
     ['alerta_atraso_min', '15', 'Alertar atraso após X minutos do horário previsto'],
     ['alerta_jornada_aberta_h', '10', 'Alertar jornada aberta após X horas'],
+    ['alerta_esquecimento_ativo', '1', 'Ativar lembretes de esquecimento de ponto (1=sim, 0=não)'],
+    ['alerta_esquecimento_min', '15', 'Lembrar esquecimento após X minutos do horário previsto'],
     ['reconhecimento_facial_min_confianca', '60', 'Confiança mínima para reconhecimento facial (%)'],
     ['reconhecimento_facial_auto_confianca', '85', 'Confiança para registro automático (%)'],
     ['adicional_noturno_inicio', '22:00', 'Início do adicional noturno'],

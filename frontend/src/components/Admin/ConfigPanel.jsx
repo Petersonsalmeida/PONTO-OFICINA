@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Save, Plus, Trash2 } from 'lucide-react';
+import { Save, Plus, Trash2, Bell } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { configAPI } from '../../services/api';
 
@@ -10,6 +10,7 @@ export default function ConfigPanel() {
   const [saving, setSaving] = useState(false);
   const [newHoliday, setNewHoliday] = useState({ data: '', nome: '', tipo: 'nacional' });
   const [ano, setAno] = useState(new Date().getFullYear().toString());
+  const [testing, setTesting] = useState(false);
 
   useEffect(() => { load(); }, [ano]);
 
@@ -47,6 +48,18 @@ export default function ConfigPanel() {
     }
   }
 
+  async function testarLembretes() {
+    setTesting(true);
+    try {
+      await configAPI.checkAlerts('todos');
+      toast.success('Verificação disparada — lembretes serão enviados se houver pendências');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Erro ao executar verificação');
+    } finally {
+      setTesting(false);
+    }
+  }
+
   async function addHoliday() {
     if (!newHoliday.data || !newHoliday.nome) {
       return toast.error('Data e nome são obrigatórios');
@@ -79,6 +92,11 @@ export default function ConfigPanel() {
       { key: 'intervalo_almoco_min', label: 'Almoço mínimo (min)', type: 'number' },
       { key: 'jornada_maxima_h', label: 'Jornada máxima (h)', type: 'number' },
     ]},
+    { section: 'Lembretes WhatsApp', fields: [
+      { key: 'alerta_esquecimento_ativo', label: 'Lembretes de esquecimento ativos', type: 'select',
+        options: [{ value: '1', label: 'Sim' }, { value: '0', label: 'Não' }] },
+      { key: 'alerta_esquecimento_min', label: 'Avisar após (min do horário previsto)', type: 'number' },
+    ]},
     { section: 'Reconhecimento Facial', fields: [
       { key: 'reconhecimento_facial_min_confianca', label: 'Confiança mínima (%)', type: 'number' },
       { key: 'reconhecimento_facial_auto_confianca', label: 'Confiança auto-registro (%)', type: 'number' },
@@ -99,17 +117,45 @@ export default function ConfigPanel() {
       {/* Configurações */}
       {FIELDS.map(section => (
         <div key={section.section} className="card space-y-4">
-          <h3 className="text-white font-bold text-base border-b border-white/10 pb-2">{section.section}</h3>
+          <div className="flex items-center justify-between border-b border-white/10 pb-2">
+            <h3 className="text-white font-bold text-base">{section.section}</h3>
+            {section.section === 'Lembretes WhatsApp' && (
+              <button
+                onClick={testarLembretes}
+                disabled={testing}
+                className="flex items-center gap-2 px-3 py-1.5 bg-amber-600/80 hover:bg-amber-500
+                           text-white text-xs rounded-lg transition-all disabled:opacity-40"
+                title="Dispara verificação imediata e envia lembretes pendentes via WhatsApp"
+              >
+                {testing
+                  ? <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  : <Bell className="w-3 h-3" />}
+                Testar agora
+              </button>
+            )}
+          </div>
           <div className="grid grid-cols-2 gap-4">
             {section.fields.map(field => (
               <div key={field.key}>
                 <label className="text-white/50 text-xs block mb-1">{field.label}</label>
-                <input
-                  className={inputCls}
-                  type={field.type || 'text'}
-                  value={config[field.key]?.valor || ''}
-                  onChange={e => updateVal(field.key, e.target.value)}
-                />
+                {field.type === 'select' ? (
+                  <select
+                    className={inputCls}
+                    value={config[field.key]?.valor || ''}
+                    onChange={e => updateVal(field.key, e.target.value)}
+                  >
+                    {field.options.map(opt => (
+                      <option key={opt.value} value={opt.value} className="bg-gray-900">{opt.label}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    className={inputCls}
+                    type={field.type || 'text'}
+                    value={config[field.key]?.valor || ''}
+                    onChange={e => updateVal(field.key, e.target.value)}
+                  />
+                )}
               </div>
             ))}
           </div>

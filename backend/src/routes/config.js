@@ -1,6 +1,8 @@
 const express = require('express');
 const { getDb } = require('../config/database');
 const { requireAuth, requireProfile } = require('../middleware/auth');
+const scheduleService = require('../services/scheduleService');
+const { logger } = require('../middleware/logger');
 
 const router = express.Router();
 
@@ -62,6 +64,25 @@ router.post('/holidays', requireAuth, requireProfile('super_admin', 'rh_gestor')
       return res.status(409).json({ error: 'Feriado já cadastrado para esta data' });
     }
     throw e;
+  }
+});
+
+// POST /api/config/check-alerts — Dispara verificação manual de alertas
+// Útil para testar a integração WhatsApp / forçar disparo sob demanda
+router.post('/check-alerts', requireAuth, requireProfile('super_admin', 'rh_gestor'), async (req, res) => {
+  const { tipo } = req.body; // 'atraso' | 'esquecimento' | 'jornada_aberta' | 'todos'
+
+  try {
+    const tasks = [];
+    if (!tipo || tipo === 'todos' || tipo === 'atraso') tasks.push(scheduleService.checkAtrasos());
+    if (!tipo || tipo === 'todos' || tipo === 'esquecimento') tasks.push(scheduleService.checkEsquecimentoPonto());
+    if (!tipo || tipo === 'todos' || tipo === 'jornada_aberta') tasks.push(scheduleService.checkJornadaAberta());
+
+    await Promise.all(tasks);
+    res.json({ message: 'Verificação executada', tipo: tipo || 'todos' });
+  } catch (err) {
+    logger.error(`Erro check-alerts: ${err.message}`);
+    res.status(500).json({ error: err.message });
   }
 });
 
